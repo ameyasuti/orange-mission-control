@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { supabase } from "../../lib/supabase/client";
 
 type SessionItem = {
   key: string;
@@ -44,6 +45,28 @@ type LeadItem = {
 };
 
 type TaskStage = "inbox" | "assigned" | "in_progress" | "review" | "done";
+
+type MissionStatus = 'INBOX' | 'ASSIGNED' | 'IN_PROGRESS' | 'REVIEW' | 'DONE';
+
+function taskStageToMissionStatus(stage: TaskStage): MissionStatus {
+  switch (stage) {
+    case 'inbox': return 'INBOX';
+    case 'assigned': return 'ASSIGNED';
+    case 'in_progress': return 'IN_PROGRESS';
+    case 'review': return 'REVIEW';
+    case 'done': return 'DONE';
+  }
+}
+
+function missionStatusToTaskStage(status: MissionStatus): TaskStage {
+  switch (status) {
+    case 'INBOX': return 'inbox';
+    case 'ASSIGNED': return 'assigned';
+    case 'IN_PROGRESS': return 'in_progress';
+    case 'REVIEW': return 'review';
+    case 'DONE': return 'done';
+  }
+}
 
 type TaskItem = {
   id: string;
@@ -154,6 +177,10 @@ export default function DashboardClient() {
 
   const [tab, setTab] = useState<"missions" | "pipeline">("missions");
 
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<string>("" );
+
   const [leads, setLeads] = useState<LeadItem[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
 
@@ -168,6 +195,30 @@ export default function DashboardClient() {
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  // Supabase auth/workspace bootstrap (pilot)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: u } = await supabase.auth.getUser();
+        const uid = u.user?.id || null;
+        if (!uid) return;
+        if (cancelled) return;
+        setProfileId(uid);
+        const { data: prof, error } = await supabase.from('profiles').select('workspace_id').eq('id', uid).maybeSingle();
+        if (error) throw error;
+        const ws = (prof as { workspace_id?: string | null } | null)?.workspace_id || null;
+        if (!ws) throw new Error('Workspace not found for user');
+        if (cancelled) return;
+        setWorkspaceId(ws);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Supabase bootstrap failed';
+        setDbError(msg);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Load/persist leads + tasks locally (v1)
@@ -218,6 +269,47 @@ export default function DashboardClient() {
       // ignore
     }
   }, []);
+
+  // Fetch missions from Supabase (overrides localStorage when available)
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('missions')
+          .select('id,title,description,tags,status,assignee_profile_id,updated_at,created_at')
+          .eq('workspace_id', workspaceId)
+          .order('updated_at', { ascending: false });
+        if (error) throw error;
+        type MissionRow = {
+          id: string;
+          title: string;
+          description: string | null;
+          tags: string[] | null;
+          status: MissionStatus;
+          assignee_profile_id: string | null;
+          updated_at: string | null;
+          created_at: string | null;
+        };
+
+        const loaded: TaskItem[] = ((data || []) as MissionRow[]).map((m) => ({
+          id: m.id,
+          title: m.title,
+          desc: m.description || '',
+          stage: missionStatusToTaskStage(m.status),
+          tags: m.tags || [],
+          assignee: m.assignee_profile_id ? String(m.assignee_profile_id) : undefined,
+          updatedAt: new Date(m.updated_at || m.created_at || Date.now()).getTime(),
+        }));
+        if (!cancelled) setTasks(loaded);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to load missions';
+        setDbError(msg);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   useEffect(() => {
     try {
