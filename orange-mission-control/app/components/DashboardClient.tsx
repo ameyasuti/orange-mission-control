@@ -530,8 +530,32 @@ export default function DashboardClient() {
     return { agentCount, activeAgents, tasksInQueue, leadsTotal, byLead, byTask };
   }, [sessionsWithNames.length, tasks, leads]);
 
-  function moveTask(id: string, stage: TaskStage) {
+  async function moveTask(id: string, stage: TaskStage) {
+    // Optimistic UI
+    const prevTasks = tasks;
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, stage, updatedAt: Date.now() } : t)));
+
+    if (!workspaceId) return;
+
+    try {
+      const status = taskStageToMissionStatus(stage);
+      const { error } = await supabase.from("missions").update({ status }).eq("id", id);
+      if (error) throw error;
+
+      // Audit event
+      await supabase.from("events").insert({
+        workspace_id: workspaceId,
+        type: "STATUS_CHANGED",
+        mission_id: id,
+        actor_profile_id: profileId,
+        payload: { status },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to update mission";
+      setDbError(msg);
+      // revert
+      setTasks(prevTasks);
+    }
   }
 
   function moveLead(id: string, stage: LeadStage) {
@@ -558,13 +582,62 @@ export default function DashboardClient() {
     setNewLead({ name: "", company: "", role: "", value: "", nextStep: "" });
   }
 
-  function addTask() {
+  async function addTask() {
     const title = newTask.title.trim();
     if (!title) return;
+
     const tags = newTask.tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
+
+    // If Supabase is ready, persist; else fallback to local-only.
+    if (workspaceId && profileId) {
+      try {
+        const { data, error } = await supabase
+          .from("missions")
+          .insert({
+            workspace_id: workspaceId,
+            title,
+            description: newTask.desc.trim() || null,
+            tags,
+            status: "INBOX",
+            created_by: profileId,
+          })
+          .select("id,title,description,tags,status,updated_at,created_at")
+          .single();
+
+        if (error) throw error;
+
+        setTasks((prev) => [
+          {
+            id: data.id,
+            title: data.title,
+            desc: data.description || undefined,
+            stage: "inbox",
+            assignee: newTask.assignee.trim() || undefined,
+            tags: (data.tags || undefined) as string[] | undefined,
+            updatedAt: new Date(data.updated_at || data.created_at || Date.now()).getTime(),
+          },
+          ...prev,
+        ]);
+
+        await supabase.from("events").insert({
+          workspace_id: workspaceId,
+          type: "MISSION_CREATED",
+          mission_id: data.id,
+          actor_profile_id: profileId,
+          payload: { title },
+        });
+
+        setNewTask({ title: "", desc: "", assignee: "", tags: "" });
+        return;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to add mission";
+        setDbError(msg);
+      }
+    }
+
     setTasks((prev) => [
       {
         id: uid(),
