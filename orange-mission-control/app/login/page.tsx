@@ -27,10 +27,6 @@ export default function LoginPage() {
     setBusy(true);
     setStatus(null);
     try {
-      const allowed = process.env.NEXT_PUBLIC_ALLOWED_EMAIL?.trim().toLowerCase();
-      if (allowed && email.trim().toLowerCase() !== allowed) {
-        throw new Error('Access is restricted for this pilot.');
-      }
 
       if (mode === 'magic') {
         const { error } = await supabase.auth.signInWithOtp({ email });
