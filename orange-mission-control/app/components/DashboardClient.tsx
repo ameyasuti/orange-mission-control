@@ -475,45 +475,64 @@ export default function DashboardClient() {
     };
   }, [selectedKey, refreshMs]);
 
-  // Fetch transcript tail for selected agent
+  // Live Feed (pilot): mission events from Supabase
   useEffect(() => {
-    if (!selected?.transcriptPath) {
+    if (!workspaceId) {
       setEvents([]);
-      setEventsError("No transcriptPath for this session.");
+      setEventsError("Waiting for workspace...");
       return;
     }
 
-    const transcriptPath = selected.transcriptPath;
     let alive = true;
 
-    async function tickEvents() {
+    function fmtMissionEvent(type: string, payload: unknown) {
+      if (type === "MISSION_CREATED") return `Created mission: ${payload?.title || "(untitled)"}`;
+      if (type === "STATUS_CHANGED") return `Status changed → ${payload?.status || "(unknown)"}`;
+      return payload ? `${type}: ${JSON.stringify(payload)}` : type;
+    }
+
+    async function tickMissionEvents() {
       try {
         setEventsError("");
-        const r = await fetch(
-          `/api/oc/transcript-tail?transcriptPath=${encodeURIComponent(transcriptPath)}&tail=200`,
-          { cache: "no-store" }
-        );
-        const j = await r.json();
+        const { data, error } = await supabase
+          .from("events")
+          .select("id,type,payload,created_at,mission_id")
+          .eq("workspace_id", workspaceId)
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
         if (!alive) return;
-        if (j.ok) setEvents(j.events as TranscriptEvent[]);
-        else {
-          setEvents([]);
-          setEventsError(j.error || "Failed");
-        }
+
+        const mapped: TranscriptEvent[] = (data || []).map((row) => {
+          const r = row as {
+            created_at?: string | null;
+            type?: string | null;
+            payload?: unknown;
+          };
+          return {
+            ts: r.created_at ? new Date(r.created_at).getTime() : undefined,
+            kind: String(r.type || "event"),
+            text: fmtMissionEvent(String(r.type || "event"), r.payload),
+            raw: row,
+          };
+        });
+
+        setEvents(mapped);
       } catch (e) {
         if (!alive) return;
         setEvents([]);
-        setEventsError(String(e));
+        setEventsError(e instanceof Error ? e.message : String(e));
       }
     }
 
-    tickEvents();
-    const id = setInterval(tickEvents, refreshMs);
+    tickMissionEvents();
+    const id = setInterval(tickMissionEvents, Math.max(2000, refreshMs));
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [selected?.transcriptPath, refreshMs]);
+  }, [workspaceId, refreshMs]);
 
   const kpi = useMemo(() => {
     const agentCount = ROSTER.length;
