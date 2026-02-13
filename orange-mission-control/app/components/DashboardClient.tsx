@@ -489,14 +489,14 @@ export default function DashboardClient() {
   }
 
   const page: React.CSSProperties = {
-    padding: 14,
+    padding: 12,
     maxWidth: 1480,
     margin: "0 auto",
   };
 
   const chrome: React.CSSProperties = {
     border: "1px solid rgba(0,0,0,0.08)",
-    borderRadius: 16,
+    borderRadius: 18,
     background: "rgba(255,255,255,0.75)",
     boxShadow: "0 12px 60px rgba(0,0,0,0.08)",
     overflow: "hidden",
@@ -507,7 +507,7 @@ export default function DashboardClient() {
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
-    padding: "12px 14px",
+    padding: "10px 12px",
     borderBottom: "1px solid rgba(0,0,0,0.06)",
     background: "rgba(255,255,255,0.65)",
     position: "sticky",
@@ -518,23 +518,23 @@ export default function DashboardClient() {
 
   const grid: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "280px 1fr 360px",
+    gridTemplateColumns: "270px 1fr 380px",
     gap: 0,
     minHeight: "calc(100vh - 140px)",
   };
 
   const rail: React.CSSProperties = {
     borderRight: "1px solid rgba(0,0,0,0.06)",
-    padding: 12,
+    padding: 10,
   };
 
   const rightRail: React.CSSProperties = {
     borderLeft: "1px solid rgba(0,0,0,0.06)",
-    padding: 12,
+    padding: 10,
   };
 
   const center: React.CSSProperties = {
-    padding: 12,
+    padding: 10,
   };
 
   return (
@@ -735,10 +735,10 @@ export default function DashboardClient() {
           <main style={center}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.8 }}>
+                <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 1.1, opacity: 0.85 }}>
                   {tab === "missions" ? "MISSION QUEUE" : "SALES PIPELINE"}
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>
+                <div style={{ fontSize: 11, opacity: 0.62, marginTop: 4, lineHeight: 1.2 }}>
                   Luxury residential lead gen · Founder POV: Amey · Cinematic tone
                 </div>
               </div>
@@ -769,8 +769,8 @@ export default function DashboardClient() {
                   style={{
                     display: "grid",
                     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                    gap: 10,
-                    marginTop: 12,
+                    gap: 8,
+                    marginTop: 10,
                   }}
                 >
                   <input
@@ -810,11 +810,11 @@ export default function DashboardClient() {
                   value={newTask.desc}
                   onChange={(e) => setNewTask((p) => ({ ...p, desc: e.target.value }))}
                   style={{
-                    marginTop: 10,
+                    marginTop: 8,
                     width: "100%",
                     padding: 10,
                     borderRadius: 12,
-                    minHeight: 70,
+                    minHeight: 60,
                     border: "1px solid rgba(0,0,0,0.08)",
                   }}
                 />
