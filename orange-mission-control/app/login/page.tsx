@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase/client';
+import { supabase } from '../../lib/supabase/client';
 
 export default function LoginPage() {
   const [mode, setMode] = useState<'magic' | 'password'>('magic');
