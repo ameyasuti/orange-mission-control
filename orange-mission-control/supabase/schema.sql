@@ -24,6 +24,11 @@ create table if not exists public.workspaces (
   created_at timestamptz not null default now()
 );
 
+-- Pilot: single workspace by name
+create unique index if not exists workspaces_name_uq on public.workspaces(name);
+insert into public.workspaces(name) values ('Orange Videos')
+on conflict (name) do nothing;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
@@ -193,7 +198,30 @@ do $$ begin
   with check (workspace_id = public.current_workspace_id());
 exception when duplicate_object then null; end $$;
 
--- Seed helper (run manually):
--- 1) Insert single workspace
--- insert into public.workspaces(name) values ('Orange Videos') returning id;
--- 2) After you sign up (auth.users created), insert your profile with that workspace_id.
+-- Auto-create profile on signup (pilot: single workspace)
+create or replace function public.handle_new_user()
+returns trigger as $$
+declare
+  ws_id uuid;
+begin
+  select id into ws_id from public.workspaces where name = 'Orange Videos' limit 1;
+
+  insert into public.profiles (id, workspace_id, display_name, role)
+  values (
+    new.id,
+    ws_id,
+    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    'OWNER'
+  )
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- Trigger (idempotent)
+do $$ begin
+  create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+exception when duplicate_object then null; end $$;
