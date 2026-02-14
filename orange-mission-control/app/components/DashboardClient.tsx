@@ -183,6 +183,7 @@ export default function DashboardClient() {
 
   const [leads, setLeads] = useState<LeadItem[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [pipelineStageIds, setPipelineStageIds] = useState<Record<LeadStage, string> | null>(null);
 
   const [newLead, setNewLead] = useState<{ name: string; company: string; role: string; value: string; nextStep: string }>(
     { name: "", company: "", role: "", value: "", nextStep: "" }
@@ -309,6 +310,103 @@ export default function DashboardClient() {
       }
     })();
     return () => { cancelled = true; };
+  }, [workspaceId]);
+
+  // Fetch pipeline from Supabase (overrides localStorage when available)
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // 1) Ensure stages exist
+        const { data: stageRows, error: stageErr } = await supabase
+          .from("pipeline_stages")
+          .select('id,name,order')
+          .eq('workspace_id', workspaceId)
+          .order('order', { ascending: true });
+        if (stageErr) throw stageErr;
+
+        type StageRow = { id: string; name: string; order: number };
+        let stages = (stageRows || []) as StageRow[];
+
+        const byName = new Map(stages.map((s) => [s.name.trim().toLowerCase(), s] as const));
+        const missing = PIPELINE_STAGES.filter((s) => !byName.has(s.label.toLowerCase()));
+
+        if (stages.length === 0 || missing.length > 0) {
+          const toInsert = PIPELINE_STAGES.filter((s) => !byName.has(s.label.toLowerCase())).map((s, i) => ({
+            workspace_id: workspaceId,
+            name: s.label,
+            order: i,
+          }));
+
+          if (toInsert.length) {
+            const { data: inserted, error: insErr } = await supabase
+              .from('pipeline_stages')
+              .insert(toInsert)
+              .select('id,name,order');
+            if (insErr) throw insErr;
+            stages = [...stages, ...((inserted || []) as StageRow[])].sort((a, b) => a.order - b.order);
+          }
+        }
+
+        const stageIdMap = Object.fromEntries(
+          PIPELINE_STAGES.map((s) => {
+            const row = stages.find((r) => r.name.trim().toLowerCase() === s.label.toLowerCase());
+            return [s.key, row?.id || ""] as const;
+          })
+        ) as Record<LeadStage, string>;
+
+        if (!cancelled) setPipelineStageIds(stageIdMap);
+
+        // 2) Load deals
+        const { data: dealsRows, error: dealsErr } = await supabase
+          .from('deals')
+          .select('id,name,stage_id,value,source,notes,updated_at,created_at')
+          .eq('workspace_id', workspaceId)
+          .order('updated_at', { ascending: false });
+        if (dealsErr) throw dealsErr;
+
+        type DealRow = {
+          id: string;
+          name: string;
+          stage_id: string | null;
+          value: number | null;
+          source: string | null;
+          notes: string | null;
+          updated_at: string | null;
+          created_at: string | null;
+        };
+
+        const stageKeyById = new Map<string, LeadStage>();
+        for (const s of PIPELINE_STAGES) {
+          if (stageIdMap[s.key]) stageKeyById.set(stageIdMap[s.key], s.key);
+        }
+
+        const loadedLeads: LeadItem[] = ((dealsRows || []) as DealRow[]).map((d) => {
+          const stage = d.stage_id ? stageKeyById.get(d.stage_id) : undefined;
+          return {
+            id: d.id,
+            name: d.name,
+            company: d.source || "(company)",
+            stage: stage || 'lead',
+            value: d.value != null ? String(d.value) : undefined,
+            nextStep: d.notes || undefined,
+            updatedAt: new Date(d.updated_at || d.created_at || Date.now()).getTime(),
+          };
+        });
+
+        // Only override localStorage pipeline if DB has data
+        if (!cancelled && loadedLeads.length) setLeads(loadedLeads);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to load pipeline';
+        setDbError(msg);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [workspaceId]);
 
   useEffect(() => {
@@ -577,28 +675,89 @@ export default function DashboardClient() {
     }
   }
 
-  function moveLead(id: string, stage: LeadStage) {
+  async function moveLead(id: string, stage: LeadStage) {
+    const prevLeads = leads;
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage, updatedAt: Date.now() } : l)));
+
+    if (!workspaceId || !pipelineStageIds) return;
+
+    try {
+      const stageId = pipelineStageIds[stage];
+      if (!stageId) throw new Error('Pipeline stage not initialized');
+
+      const { error } = await supabase.from('deals').update({ stage_id: stageId }).eq('id', id);
+      if (error) throw error;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to move deal';
+      setDbError(msg);
+      setLeads(prevLeads);
+    }
   }
 
-  function addLead() {
+  async function addLead() {
     const name = newLead.name.trim();
     const company = newLead.company.trim();
     if (!name || !company) return;
+
+    // Supabase-backed when ready
+    if (workspaceId && pipelineStageIds) {
+      try {
+        const stageId = pipelineStageIds.lead;
+        const valueNum = newLead.value.trim() ? Number(newLead.value.trim()) : null;
+
+        const { data, error } = await supabase
+          .from('deals')
+          .insert({
+            workspace_id: workspaceId,
+            name,
+            source: company,
+            stage_id: stageId || null,
+            value: Number.isFinite(valueNum as number) ? valueNum : null,
+            notes: newLead.nextStep.trim() || null,
+            owner_profile_id: profileId,
+          })
+          .select('id,name,stage_id,value,source,notes,updated_at,created_at')
+          .single();
+
+        if (error) throw error;
+
+        setLeads((prev) => [
+          {
+            id: data.id,
+            name: data.name,
+            company: data.source || company,
+            role: newLead.role.trim() || undefined,
+            stage: 'lead',
+            value: data.value != null ? String(data.value) : undefined,
+            nextStep: data.notes || undefined,
+            updatedAt: new Date(data.updated_at || data.created_at || Date.now()).getTime(),
+          },
+          ...prev,
+        ]);
+
+        setNewLead({ name: '', company: '', role: '', value: '', nextStep: '' });
+        return;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to add deal';
+        setDbError(msg);
+      }
+    }
+
+    // Fallback local-only
     setLeads((prev) => [
       {
         id: uid(),
         name,
         company,
         role: newLead.role.trim() || undefined,
-        stage: "lead",
+        stage: 'lead',
         value: newLead.value.trim() || undefined,
         nextStep: newLead.nextStep.trim() || undefined,
         updatedAt: Date.now(),
       },
       ...prev,
     ]);
-    setNewLead({ name: "", company: "", role: "", value: "", nextStep: "" });
+    setNewLead({ name: '', company: '', role: '', value: '', nextStep: '' });
   }
 
   async function addTask() {
